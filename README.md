@@ -2,56 +2,36 @@
 
 Standalone Docker Compose benchmark for fast Telethon media download/upload tests.
 
-## Setup
-
 ```bash
 cp .env.example .env
 mkdir -p sessions downloads logs
 ```
 
-Fill `.env` with `TG_API_ID`, `TG_API_HASH`, source, target, and benchmark settings.
-
-Place the prepared upload file at:
-
-```bash
-downloads/record.mp4
-```
-
-## Create Session
+Fill `.env`, put the prepared upload file at `downloads/record.mp4`, then create a session:
 
 ```bash
 docker compose run --rm login
 ```
 
-This creates `sessions/userbot.session` by default.
-
-## Run Benchmark
+Run:
 
 ```bash
 docker compose run --rm benchmark
 ```
 
-The benchmark writes:
+Results are written to `logs/results.json`. With `BENCH_SEND_REPORT=1`, the script also sends an HTML summary and `results.json` to `BENCH_TARGET`.
 
-```text
-logs/results.json
-```
-
-When `BENCH_SEND_REPORT=1`, it also sends an HTML summary message and the `results.json` file to `BENCH_TARGET`.
-
-## Proxy
-
-VPS default is direct Telegram access:
+On a VPS, keep direct mode:
 
 ```env
 BENCH_PROXY_ENABLED=0
 ```
 
-To use a proxy:
+If Telegram starts logging `GetFileRequest flood wait`, reduce request pressure:
 
 ```env
-BENCH_PROXY_ENABLED=1
-BENCH_PROXY_URL=socks5://host.docker.internal:8897
+BENCH_FAST_CONFIGS=1:512,2:512,3:512,4:512
+BENCH_DOWNLOAD_REQUEST_DELAY_MS=100
 ```
 
-Supported schemes: `socks4://`, `socks5://`, `socks5h://`, `http://`.
+Increase the delay to `200` or `300` if flood waits continue. The fastest config is the one with the best completed MB/s, not the highest connection count.

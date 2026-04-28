@@ -1,5 +1,3 @@
-# copied from https://github.com/tulir/mautrix-telegram/blob/master/mautrix_telegram/util/parallel_file_transfer.py
-# Copyright (C) 2021 Tulir Asokan
 from __future__ import annotations
 
 import asyncio
@@ -57,8 +55,8 @@ class DownloadSender:
         self.request.offset += self.stride
         return result.bytes
 
-    def disconnect(self):
-        return self.sender.disconnect()
+    async def disconnect(self) -> None:
+        await self.sender.disconnect()
 
 
 class UploadSender:
@@ -75,7 +73,6 @@ class UploadSender:
     ) -> None:
         self.client = client
         self.sender = sender
-        self.part_count = part_count
         self.request = (
             SaveBigFilePartRequest(file_id, index, part_count, b"")
             if big
@@ -114,7 +111,7 @@ class ParallelTransferrer:
 
     async def _cleanup(self) -> None:
         if self.senders:
-            await asyncio.gather(*[sender.disconnect() for sender in self.senders])
+            await asyncio.gather(*[sender.disconnect() for sender in self.senders], return_exceptions=True)
         self.senders = []
 
     async def _create_sender(self) -> MTProtoSender:
@@ -136,28 +133,19 @@ class ParallelTransferrer:
             self.auth_key = sender.auth_key
         return sender
 
-    async def _create_download_sender(
+    async def download(
         self,
         file: TypeLocation,
-        index: int,
-        part_size: int,
-        stride: int,
-        part_count: int,
-    ) -> DownloadSender:
-        return DownloadSender(
-            self.client,
-            await self._create_sender(),
-            file,
-            index * part_size,
-            part_size,
-            stride,
-            part_count,
-        )
+        file_size: int,
+        part_size_kb: int,
+        connection_count: int,
+        request_delay_seconds: float = 0.0,
+    ) -> AsyncGenerator[bytes, None]:
+        part_size = part_size_kb * 1024
+        part_count = math.ceil(file_size / part_size)
+        minimum, remainder = divmod(part_count, connection_count)
 
-    async def _init_download(self, connections: int, file: TypeLocation, part_count: int, part_size: int) -> None:
-        minimum, remainder = divmod(part_count, connections)
-
-        def get_part_count() -> int:
+        def count_for_sender() -> int:
             nonlocal remainder
             if remainder > 0:
                 remainder -= 1
@@ -165,44 +153,31 @@ class ParallelTransferrer:
             return minimum
 
         self.senders = [
-            await self._create_download_sender(file, 0, part_size, connections * part_size, get_part_count()),
-            *await asyncio.gather(
-                *[
-                    self._create_download_sender(file, i, part_size, connections * part_size, get_part_count())
-                    for i in range(1, connections)
-                ]
-            ),
+            DownloadSender(
+                self.client,
+                await self._create_sender(),
+                file,
+                i * part_size,
+                part_size,
+                connection_count * part_size,
+                count_for_sender(),
+            )
+            for i in range(connection_count)
         ]
-
-    async def _create_upload_sender(
-        self,
-        file_id: int,
-        part_count: int,
-        big: bool,
-        index: int,
-        stride: int,
-    ) -> UploadSender:
-        return UploadSender(
-            self.client,
-            await self._create_sender(),
-            file_id,
-            part_count,
-            big,
-            index,
-            stride,
-            loop=self.loop,
-        )
-
-    async def _init_upload(self, connections: int, file_id: int, part_count: int, big: bool) -> None:
-        self.senders = [
-            await self._create_upload_sender(file_id, part_count, big, 0, connections),
-            *await asyncio.gather(
-                *[
-                    self._create_upload_sender(file_id, part_count, big, i, connections)
-                    for i in range(1, connections)
-                ]
-            ),
-        ]
+        try:
+            part = 0
+            while part < part_count:
+                tasks = [self.loop.create_task(sender.next()) for sender in self.senders]
+                for task in tasks:
+                    data = await task
+                    if not data:
+                        break
+                    yield data
+                    part += 1
+                if request_delay_seconds > 0:
+                    await asyncio.sleep(request_delay_seconds)
+        finally:
+            await self._cleanup()
 
     async def init_upload(
         self,
@@ -214,7 +189,19 @@ class ParallelTransferrer:
         part_size = part_size_kb * 1024
         part_count = (file_size + part_size - 1) // part_size
         is_large = file_size > 10 * 1024 * 1024
-        await self._init_upload(connection_count, file_id, part_count, is_large)
+        self.senders = [
+            UploadSender(
+                self.client,
+                await self._create_sender(),
+                file_id,
+                part_count,
+                is_large,
+                i,
+                connection_count,
+                self.loop,
+            )
+            for i in range(connection_count)
+        ]
         return part_size, part_count, is_large
 
     async def upload(self, part: bytes) -> None:
@@ -223,29 +210,6 @@ class ParallelTransferrer:
 
     async def finish_upload(self) -> None:
         await self._cleanup()
-
-    async def download(
-        self,
-        file: TypeLocation,
-        file_size: int,
-        part_size_kb: int,
-        connection_count: int,
-    ) -> AsyncGenerator[bytes, None]:
-        part_size = part_size_kb * 1024
-        part_count = math.ceil(file_size / part_size)
-        await self._init_download(connection_count, file, part_count, part_size)
-        try:
-            part = 0
-            while part < part_count:
-                tasks = [self.loop.create_task(sender.next()) for sender in self.senders]
-                for task in tasks:
-                    data = await task
-                    if not data:
-                        break
-                    yield data
-                    part += 1
-        finally:
-            await self._cleanup()
 
 
 def get_input_location(document: Document):
@@ -256,10 +220,4 @@ def random_file_id() -> int:
     return helpers.generate_random_long()
 
 
-__all__ = [
-    "InputFile",
-    "InputFileBig",
-    "ParallelTransferrer",
-    "get_input_location",
-    "random_file_id",
-]
+__all__ = ["InputFile", "InputFileBig", "ParallelTransferrer", "get_input_location", "random_file_id"]
