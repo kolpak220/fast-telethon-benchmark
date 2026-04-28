@@ -61,21 +61,39 @@ def session_path() -> Path:
 
 
 def fast_configs() -> list[dict[str, int | str]]:
-    raw = os.getenv("BENCH_FAST_CONFIGS", "2:512,3:512,4:512,8:512")
+    raw = os.getenv("BENCH_FAST_CONFIGS", "4:512:512,8:512:512,12:512:512,20:512:512,24:512:512,32:512:512,40:512:512,4:1024:512,8:1024:512,12:1024:512,20:1024:512,24:1024:512,32:1024:512,40:1024:512")
     configs = []
     for item in raw.split(","):
         item = item.strip()
         if not item:
             continue
-        connections, part = item.split(":", 1) if ":" in item else (item, "512")
+        parts = item.split(":")
+        if len(parts) > 3:
+            raise SystemExit("BENCH_FAST_CONFIGS entries must be workers[:part_kb] or workers:download_part_kb:upload_part_kb")
+        connections = parts[0]
+        download_part = parts[1] if len(parts) >= 2 else "512"
+        upload_part = parts[2] if len(parts) == 3 else download_part
         c = int(connections)
-        p = int(part)
-        if c <= 0 or p <= 0:
+        dl = int(download_part)
+        up = int(upload_part)
+        if c <= 0 or dl <= 0 or up <= 0:
             raise SystemExit("BENCH_FAST_CONFIGS values must be positive")
-        configs.append({"label": f"c{c}-p{p}", "connections": c, "part_size_kb": p})
+        label = f"c{c}-d{dl}-u{up}" if dl != up else f"c{c}-p{dl}"
+        configs.append({"label": label, "connections": c, "part_size_kb": dl, "download_part_size_kb": dl, "upload_part_size_kb": up})
     if not configs:
         raise SystemExit("BENCH_FAST_CONFIGS is empty")
     return configs
+
+
+def validate_configs(configs: list[dict[str, int | str]], upload_enabled: bool) -> None:
+    if not upload_enabled:
+        return
+    too_large = [str(cfg["label"]) for cfg in configs if int(cfg["upload_part_size_kb"]) > 512]
+    if too_large:
+        raise SystemExit(
+            "BENCH_FAST_CONFIGS upload part size must be <= 512 KB when BENCH_UPLOAD=1. "
+            f"Use workers:download_part_kb:upload_part_kb for these configs: {', '.join(too_large)}"
+        )
 
 
 def proxy_config() -> dict[str, Any] | None:
@@ -157,7 +175,7 @@ async def download_media(client: TelegramClient, message: Any, out_dir: Path, cf
         async for chunk in downloader.download(
             location,
             message.document.size,
-            part_size_kb=int(cfg["part_size_kb"]),
+            part_size_kb=int(cfg["download_part_size_kb"]),
             connection_count=int(cfg["connections"]),
             request_delay_seconds=delay,
         ):
@@ -170,7 +188,7 @@ async def upload_input_file(client: TelegramClient, path: Path, cfg: dict[str, A
     file_id = random_file_id()
     size = path.stat().st_size
     uploader = ParallelTransferrer(client)
-    part_size, part_count, is_large = await uploader.init_upload(file_id, size, int(cfg["part_size_kb"]), int(cfg["connections"]))
+    part_size, part_count, is_large = await uploader.init_upload(file_id, size, int(cfg["upload_part_size_kb"]), int(cfg["connections"]))
     sent = 0
     try:
         with path.open("rb") as file:
@@ -190,7 +208,16 @@ async def run_one(client: TelegramClient, cfg: dict[str, Any], base: dict[str, A
     out_dir = DOWNLOAD_DIR / f"{label}-{uuid.uuid4().hex[:8]}"
     out_dir.mkdir(parents=True, exist_ok=True)
     started = time.time()
-    result = {"label": label, "connections": cfg["connections"], "part_size_kb": cfg["part_size_kb"], "downloaded": False, "uploaded": False, "error": None}
+    result = {
+        "label": label,
+        "connections": cfg["connections"],
+        "part_size_kb": cfg["part_size_kb"],
+        "download_part_size_kb": cfg["download_part_size_kb"],
+        "upload_part_size_kb": cfg["upload_part_size_kb"],
+        "downloaded": False,
+        "uploaded": False,
+        "error": None,
+    }
     download_tracker = Tracker(f"{label} download")
     upload_tracker = Tracker(f"{label} upload")
     try:
@@ -272,6 +299,8 @@ async def main() -> None:
         "download_delay": float(os.getenv("BENCH_DOWNLOAD_REQUEST_DELAY_MS", "0")) / 1000,
         "keep_downloads": enabled("BENCH_KEEP_DOWNLOADS", "1"),
     }
+    configs = fast_configs()
+    validate_configs(configs, upload_enabled)
     report = {
         "source": f"{source_chat}:{source_message_id}",
         "target": base["target_chat"],
@@ -280,7 +309,7 @@ async def main() -> None:
         "download_request_delay_ms": int(base["download_delay"] * 1000),
         "upload_enabled": upload_enabled,
         "upload_file": str(upload_file) if upload_enabled else None,
-        "fast_configs": fast_configs(),
+        "fast_configs": configs,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "results": [],
     }

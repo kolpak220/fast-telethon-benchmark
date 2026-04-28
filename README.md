@@ -30,8 +30,10 @@ BENCH_PROXY_ENABLED=0
 If Telegram starts logging `GetFileRequest flood wait`, reduce request pressure:
 
 ```env
-BENCH_FAST_CONFIGS=1:512,2:512,3:512,4:512
+BENCH_FAST_CONFIGS=4:512:512,8:512:512,12:512:512,20:512:512,4:1024:512,8:1024:512,12:1024:512,20:1024:512
 BENCH_DOWNLOAD_REQUEST_DELAY_MS=100
 ```
 
 Increase the delay to `200` or `300` if flood waits continue. The fastest config is the one with the best completed MB/s, not the highest connection count.
+
+`BENCH_FAST_CONFIGS` supports either `workers:part_kb` for legacy same-size download/upload parts, or `workers:download_part_kb:upload_part_kb` to keep uploads at Telegram-safe sizes while testing larger download parts. When uploads are enabled, keep `upload_part_kb` at `512` or lower.
