@@ -1,0 +1,58 @@
+services:
+  benchmark:
+    build:
+      context: .
+    image: fast-telethon-benchmark:local
+    container_name: fast-telethon-benchmark
+    environment:
+      TG_API_ID: "${TG_API_ID:?set TG_API_ID}"
+      TG_API_HASH: "${TG_API_HASH:?set TG_API_HASH}"
+      TELETHON_SESSION: "${TELETHON_SESSION:-userbot}"
+      TELETHON_SESSION_DIR: /sessions
+      BENCH_SOURCE: "${BENCH_SOURCE:-https://t.me/c/3369127007/14}"
+      BENCH_TARGET: "${BENCH_TARGET:--1003966203647}"
+      BENCH_UPLOAD_FILE: "${BENCH_UPLOAD_FILE:-/downloads/record.mp4}"
+      BENCH_FAST_CONFIGS: "${BENCH_FAST_CONFIGS:-4:512,8:512,12:512,20:512}"
+      BENCH_DOWNLOAD: "${BENCH_DOWNLOAD:-1}"
+      BENCH_UPLOAD: "${BENCH_UPLOAD:-1}"
+      BENCH_SEND_REPORT: "${BENCH_SEND_REPORT:-1}"
+      BENCH_KEEP_DOWNLOADS: "${BENCH_KEEP_DOWNLOADS:-1}"
+      BENCH_DOWNLOAD_TIMEOUT_SECONDS: "${BENCH_DOWNLOAD_TIMEOUT_SECONDS:-6000}"
+      BENCH_UPLOAD_TIMEOUT_SECONDS: "${BENCH_UPLOAD_TIMEOUT_SECONDS:-6000}"
+      BENCH_PROXY_ENABLED: "${BENCH_PROXY_ENABLED:-0}"
+      BENCH_PROXY_URL: "${BENCH_PROXY_URL:-socks5://host.docker.internal:8897}"
+      BENCH_LOG_LEVEL: "${BENCH_LOG_LEVEL:-INFO}"
+      BENCH_RESULT_PATH: /logs/results.json
+      BENCH_DOWNLOAD_DIR: /downloads/bench-runs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./sessions:/sessions
+      - ./downloads:/downloads
+      - ./logs:/logs
+
+  login:
+    build:
+      context: .
+    image: fast-telethon-login:local
+    container_name: fast-telethon-login
+    entrypoint:
+      - python
+      - -u
+      - /app/create_session.py
+    stdin_open: true
+    tty: true
+    environment:
+      TG_API_ID: "${TG_API_ID:?set TG_API_ID}"
+      TG_API_HASH: "${TG_API_HASH:?set TG_API_HASH}"
+      TELETHON_SESSION: "${TELETHON_SESSION:-userbot}"
+      TELETHON_SESSION_DIR: /sessions
+      TELETHON_PHONE: "${TELETHON_PHONE:-}"
+      BENCH_PROXY_ENABLED: "${BENCH_PROXY_ENABLED:-0}"
+      BENCH_PROXY_URL: "${BENCH_PROXY_URL:-socks5://host.docker.internal:8897}"
+      BENCH_LOG_LEVEL: "${BENCH_LOG_LEVEL:-INFO}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./sessions:/sessions
+      - ./logs:/logs

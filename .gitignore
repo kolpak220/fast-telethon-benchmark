@@ -1,0 +1,6 @@
+.env
+sessions/
+downloads/
+logs/
+__pycache__/
+*.py[cod]
